@@ -16,3 +16,5 @@ class Config:
     MAX_LOSS_PERCENT = float(os.getenv("MAX_LOSS_PERCENT", "2.0"))
     STOP_LOSS_PERCENT = float(os.getenv("STOP_LOSS_PERCENT", "1.5"))
     TAKE_PROFIT_PERCENT = float(os.getenv("TAKE_PROFIT_PERCENT", "3.0"))
+
+    LOOP_INTERVAL = int(os.getenv("LOOP_INTERVAL", "0"))  # 0 = single run, >0 = seconds between runs
