@@ -18,3 +18,6 @@ class Config:
     TAKE_PROFIT_PERCENT = float(os.getenv("TAKE_PROFIT_PERCENT", "3.0"))
 
     LOOP_INTERVAL = int(os.getenv("LOOP_INTERVAL", "0"))  # 0 = single run, >0 = seconds between runs
+
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
