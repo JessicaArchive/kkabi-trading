@@ -7,6 +7,7 @@ Commands:
     /analyze    - Run full strategy analysis
     /backtest   - Quick 30-day backtest result
     /config     - Show current config
+    /monitor    - Toggle auto signal monitoring
     /help       - Show available commands
 """
 
@@ -30,6 +31,9 @@ class KkabiBot:
             api_secret=Config.API_SECRET,
         )
         self.app = Application.builder().token(token).build()
+        self._last_signal_1h = None
+        self._last_signal_4h = None
+        self._monitoring = True
         self._register_handlers()
 
     def _register_handlers(self):
@@ -39,6 +43,7 @@ class KkabiBot:
         self.app.add_handler(CommandHandler("analyze", self.cmd_analyze))
         self.app.add_handler(CommandHandler("backtest", self.cmd_backtest))
         self.app.add_handler(CommandHandler("config", self.cmd_config))
+        self.app.add_handler(CommandHandler("monitor", self.cmd_monitor))
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
@@ -48,7 +53,10 @@ class KkabiBot:
             "/analyze - 전체 전략 분석\n"
             "/backtest - 30일 백테스트 결과\n"
             "/config - 현재 설정 확인\n"
-            "/help - 이 메시지"
+            "/monitor - 자동 모니터링 ON/OFF\n"
+            "/help - 이 메시지\n\n"
+            "📡 자동 모니터링이 활성화되어 있습니다.\n"
+            "매수/매도 시그널 발생 시 자동으로 알려드립니다!"
         )
         await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -189,22 +197,106 @@ class KkabiBot:
         )
         await update.message.reply_text(msg, parse_mode="Markdown")
 
-    async def send_alert(self, chat_id: int, signal: str, details: dict):
-        """Send trading signal alert (called from main bot loop)."""
-        signal_map = {"BUY": "🟢 매수 신호!", "SELL": "🔴 매도 신호!"}
-        signal_text = signal_map.get(signal, signal)
+    async def cmd_monitor(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        self._monitoring = not self._monitoring
+        status = "ON ✅" if self._monitoring else "OFF ❌"
+        await update.message.reply_text(
+            f"📡 자동 모니터링: *{status}*", parse_mode="Markdown"
+        )
+
+    async def send_alert(self, chat_id, signal: str, timeframe: str, scores: dict, total: int, details: dict):
+        """Send loud trading signal alert."""
+        if signal == "BUY":
+            header = (
+                "🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨\n"
+                "💰💰💰 매수 시그널 발생!!! 💰💰💰\n"
+                "🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨"
+            )
+        elif signal == "SELL":
+            header = (
+                "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n"
+                "⚠️⚠️⚠️ 매도 시그널 발생!!! ⚠️⚠️⚠️\n"
+                "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴"
+            )
+        else:
+            return
+
+        score_lines = []
+        for name, score in scores.items():
+            arrow = "↑" if score > 0 else "↓" if score < 0 else "→"
+            score_lines.append(f"  {name.upper():<10} {score:+d} {arrow}")
+        scores_text = "\n".join(score_lines)
 
         msg = (
-            f"🚨 *{signal_text}*\n\n"
-            f"심볼: `{Config.SYMBOL}`\n"
-            f"가격: `${details.get('price', 0):,.2f}`\n"
-            f"RSI: `{details.get('rsi', 0):.1f}`\n"
-            f"MACD: `{details.get('macd', 0):.4f}`\n\n"
-            f"_자동 알림 - Kkabi Trading Bot_"
+            f"{header}\n\n"
+            f"📊 *{Config.SYMBOL} | {timeframe}*\n"
+            f"전략: PentaScore v1.0\n\n"
+            f"💰 가격: `${details.get('price', 0):,.2f}`\n"
+            f"📈 총점: `{total:+d}` / 9\n\n"
+            f"*지표별 점수:*\n```\n{scores_text}\n```\n\n"
+            f"*상세:*\n"
+            f"  RSI: `{details.get('rsi', 0):.1f}`\n"
+            f"  MACD: `{details.get('macd', 0):.4f}`\n"
+            f"  BB위치: `{details.get('bb_position', 0):.1%}`\n"
+            f"  거래량비: `{details.get('vol_ratio', 0):.2f}x`"
         )
         await self.app.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+        logger.info(f"Alert sent: {signal} on {timeframe}, score={total}")
+
+    async def _check_signal(self, context: ContextTypes.DEFAULT_TYPE, timeframe: str):
+        """Check signal for a timeframe and send alert if BUY/SELL."""
+        if not self._monitoring:
+            return
+
+        chat_id = Config.TELEGRAM_CHAT_ID
+        if not chat_id:
+            logger.warning("TELEGRAM_CHAT_ID not set, skipping signal check")
+            return
+
+        try:
+            from strategy.base import BaseStrategy
+            strategy = BaseStrategy(self.client, Config.SYMBOL)
+            result = strategy.analyze(timeframe)
+
+            signal = result["signal"]
+            last_attr = f"_last_signal_{timeframe.replace('h', 'h')}"
+
+            # Skip if same signal as last check (prevent spam)
+            last = getattr(self, last_attr, None)
+            if signal == last:
+                return
+
+            setattr(self, last_attr, signal)
+
+            if signal in ("BUY", "SELL"):
+                await self.send_alert(
+                    chat_id=int(chat_id),
+                    signal=signal,
+                    timeframe=timeframe,
+                    scores=result["scores"],
+                    total=result["total"],
+                    details=result.get("details", {}),
+                )
+        except Exception as e:
+            logger.error(f"Signal check error ({timeframe}): {e}")
+
+    async def _check_1h(self, context: ContextTypes.DEFAULT_TYPE):
+        await self._check_signal(context, "1h")
+
+    async def _check_4h(self, context: ContextTypes.DEFAULT_TYPE):
+        await self._check_signal(context, "4h")
+
+    def _setup_jobs(self):
+        """Schedule automatic signal monitoring."""
+        job_queue = self.app.job_queue
+        # 1h check: every hour
+        job_queue.run_repeating(self._check_1h, interval=3600, first=10)
+        # 4h check: every 4 hours
+        job_queue.run_repeating(self._check_4h, interval=14400, first=10)
+        logger.info("Signal monitoring jobs scheduled (1h: every hour, 4h: every 4 hours)")
 
     def run(self):
-        """Start the bot."""
-        logger.info("Starting Kkabi Telegram Bot...")
+        """Start the bot with auto monitoring."""
+        logger.info("Starting Kkabi Telegram Bot with auto monitoring...")
+        self._setup_jobs()
         self.app.run_polling()
