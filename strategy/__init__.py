@@ -1,12 +1,10 @@
 from exchange.client import ExchangeClient
 from strategy.base import BaseStrategy
-from strategy.mean_reversion import MeanReversionStrategy
-from strategy.breakout_hunter import BreakoutHunterStrategy
+from strategy.ichimoku import IchimokuStrategy
 
 STRATEGIES = {
     "base": BaseStrategy,
-    "mean_reversion": MeanReversionStrategy,
-    "breakout_hunter": BreakoutHunterStrategy,
+    "ichimoku": IchimokuStrategy,
 }
 
 
