@@ -8,15 +8,22 @@ logger = setup_logger(__name__)
 
 class BaseStrategy:
     """
-    Multi-signal scoring strategy combining:
+    PentaScore Strategy v1.0
+
+    5-indicator scoring strategy that combines:
     - SMA Crossover (trend detection)
     - MACD (momentum)
     - Bollinger Bands (volatility & mean reversion)
     - RSI (overbought/oversold)
     - Volume Analysis (confirmation)
 
-    Each indicator votes with a score. Final decision based on total score.
+    Each indicator votes with a score (-2 to +2).
+    Final signal determined by total score vs thresholds.
+    Score range: -9 to +9
     """
+
+    STRATEGY_NAME = "PentaScore"
+    STRATEGY_VERSION = "1.0"
 
     # Score thresholds
     BUY_THRESHOLD = 3
@@ -134,7 +141,7 @@ class BaseStrategy:
     def analyze(self, timeframe: str = "1h") -> dict:
         ohlcv = self.client.get_ohlcv(self.symbol, timeframe, limit=120)
         if not ohlcv:
-            return {"signal": "NO_DATA", "scores": {}, "total": 0, "details": {}}
+            return {"strategy": f"{self.STRATEGY_NAME} v{self.STRATEGY_VERSION}", "signal": "NO_DATA", "scores": {}, "total": 0, "details": {}}
 
         df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
@@ -148,7 +155,7 @@ class BaseStrategy:
         # Drop NaN rows
         df = df.dropna()
         if len(df) < 2:
-            return {"signal": "NO_DATA", "scores": {}, "total": 0, "details": {}}
+            return {"strategy": f"{self.STRATEGY_NAME} v{self.STRATEGY_VERSION}", "signal": "NO_DATA", "scores": {}, "total": 0, "details": {}}
 
         # Score each indicator
         scores = self._score_signals(df)
@@ -184,6 +191,7 @@ class BaseStrategy:
         )
 
         return {
+            "strategy": f"{self.STRATEGY_NAME} v{self.STRATEGY_VERSION}",
             "signal": signal,
             "scores": scores,
             "total": total,
