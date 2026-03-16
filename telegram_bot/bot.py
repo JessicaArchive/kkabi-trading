@@ -237,7 +237,11 @@ class KkabiBot:
                 "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴"
             )
         else:
-            return
+            header = (
+                "⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪\n"
+                "⏸️⏸️⏸️ 관망 시그널 ⏸️⏸️⏸️\n"
+                "⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪"
+            )
 
         score_lines = []
         for name, score in scores.items():
@@ -286,15 +290,14 @@ class KkabiBot:
 
             setattr(self, last_attr, signal)
 
-            if signal in ("BUY", "SELL"):
-                await self.send_alert(
-                    chat_id=int(chat_id),
-                    signal=signal,
-                    timeframe=timeframe,
-                    scores=result["scores"],
-                    total=result["total"],
-                    details=result.get("details", {}),
-                )
+            await self.send_alert(
+                chat_id=int(chat_id),
+                signal=signal,
+                timeframe=timeframe,
+                scores=result["scores"],
+                total=result["total"],
+                details=result.get("details", {}),
+            )
         except Exception as e:
             logger.error(f"Signal check error ({timeframe}): {e}")
 
@@ -313,7 +316,11 @@ class KkabiBot:
                 "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴"
             )
         else:
-            return
+            header = (
+                "⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪\n"
+                "😐 F&G 관망 시그널 😐\n"
+                "⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪"
+            )
 
         fng_value = details.get("fng_value", 0)
         fng_label = details.get("fng_label", "N/A")
@@ -353,14 +360,13 @@ class KkabiBot:
 
             self._last_signal_fng = signal
 
-            if signal in ("BUY", "SELL"):
-                await self.send_fng_alert(
-                    chat_id=int(chat_id),
-                    signal=signal,
-                    scores=result["scores"],
-                    total=result["total"],
-                    details=result.get("details", {}),
-                )
+            await self.send_fng_alert(
+                chat_id=int(chat_id),
+                signal=signal,
+                scores=result["scores"],
+                total=result["total"],
+                details=result.get("details", {}),
+            )
         except Exception as e:
             logger.error(f"F&G signal check error: {e}")
 
