@@ -33,6 +33,7 @@ class KkabiBot:
         self.app = Application.builder().token(token).build()
         self._last_signal_1h = None
         self._last_signal_4h = None
+        self._last_signal_fng = None
         self._monitoring = True
         self._register_handlers()
 
@@ -90,6 +91,8 @@ class KkabiBot:
         await update.message.reply_text("🔍 전략 분석 중...")
 
         from strategy.base import BaseStrategy
+        from strategy.fear_greed import FearGreedStrategy
+
         strategy = BaseStrategy(self.client, Config.SYMBOL)
         result = strategy.analyze(Config.TIMEFRAME)
 
@@ -112,7 +115,7 @@ class KkabiBot:
         scores_text = "\n".join(score_lines)
 
         msg = (
-            f"📊 *{Config.SYMBOL} 전략 분석*\n"
+            f"📊 *{Config.SYMBOL} PentaScore 분석*\n"
             f"타임프레임: `{Config.TIMEFRAME}`\n\n"
             f"*시그널: {signal_text}*\n"
             f"총 점수: `{total:+d}` (매수≥3, 매도≤-3)\n\n"
@@ -125,6 +128,21 @@ class KkabiBot:
             f"  거래량비: `{details.get('vol_ratio', 0):.2f}x`"
         )
         await update.message.reply_text(msg, parse_mode="Markdown")
+
+        # Fear & Greed analysis
+        fng_strategy = FearGreedStrategy(self.client, Config.SYMBOL)
+        fng_result = fng_strategy.analyze()
+
+        if fng_result["signal"] != "NO_DATA":
+            fng_signal_text = signal_map.get(fng_result["signal"], fng_result["signal"])
+            fng_details = fng_result.get("details", {})
+            fng_msg = (
+                f"😱 *Fear & Greed 역발상*\n\n"
+                f"*시그널: {fng_signal_text}*\n"
+                f"F&G Index: `{fng_details.get('fng_value', 0)}` ({fng_details.get('fng_label', 'N/A')})\n"
+                f"총점: `{fng_result['total']:+d}` / 3"
+            )
+            await update.message.reply_text(fng_msg, parse_mode="Markdown")
 
     async def cmd_backtest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📊 30일 백테스트 실행 중... (1~2분 소요)")
@@ -280,6 +298,72 @@ class KkabiBot:
         except Exception as e:
             logger.error(f"Signal check error ({timeframe}): {e}")
 
+    async def send_fng_alert(self, chat_id, signal: str, scores: dict, total: int, details: dict):
+        """Send Fear & Greed signal alert."""
+        if signal == "BUY":
+            header = (
+                "🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢\n"
+                "😱➡️💰 공포 매수 시그널!!! 😱➡️💰\n"
+                "🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢"
+            )
+        elif signal == "SELL":
+            header = (
+                "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n"
+                "🤑➡️⚠️ 탐욕 매도 시그널!!! 🤑➡️⚠️\n"
+                "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴"
+            )
+        else:
+            return
+
+        fng_value = details.get("fng_value", 0)
+        fng_label = details.get("fng_label", "N/A")
+
+        msg = (
+            f"{header}\n\n"
+            f"📊 *{Config.SYMBOL} | Fear & Greed 역발상*\n"
+            f"전략: Contrarian v1.0\n\n"
+            f"💰 가격: `${details.get('price', 0):,.2f}`\n"
+            f"😱 F&G Index: `{fng_value}` ({fng_label})\n"
+            f"📈 총점: `{total:+d}` / 3\n\n"
+            f"_\"남들이 공포일 때 사라, 남들이 탐욕일 때 팔아라\"_"
+        )
+        await self.app.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+        logger.info(f"F&G Alert sent: {signal}, fng={fng_value} ({fng_label}), score={total}")
+
+    async def _check_fng(self, context: ContextTypes.DEFAULT_TYPE):
+        """Check Fear & Greed signal and send alert if BUY/SELL."""
+        if not self._monitoring:
+            return
+
+        chat_id = Config.TELEGRAM_CHAT_ID
+        if not chat_id:
+            return
+
+        try:
+            from strategy.fear_greed import FearGreedStrategy
+            strategy = FearGreedStrategy(self.client, Config.SYMBOL)
+            result = strategy.analyze()
+
+            signal = result["signal"]
+            if signal == "NO_DATA":
+                return
+
+            if signal == self._last_signal_fng:
+                return
+
+            self._last_signal_fng = signal
+
+            if signal in ("BUY", "SELL"):
+                await self.send_fng_alert(
+                    chat_id=int(chat_id),
+                    signal=signal,
+                    scores=result["scores"],
+                    total=result["total"],
+                    details=result.get("details", {}),
+                )
+        except Exception as e:
+            logger.error(f"F&G signal check error: {e}")
+
     async def _check_1h(self, context: ContextTypes.DEFAULT_TYPE):
         await self._check_signal(context, "1h")
 
@@ -293,7 +377,9 @@ class KkabiBot:
         job_queue.run_repeating(self._check_1h, interval=3600, first=10)
         # 4h check: every 4 hours
         job_queue.run_repeating(self._check_4h, interval=14400, first=10)
-        logger.info("Signal monitoring jobs scheduled (1h: every hour, 4h: every 4 hours)")
+        # F&G check: every 4 hours (daily index, no need for frequent checks)
+        job_queue.run_repeating(self._check_fng, interval=14400, first=15)
+        logger.info("Signal monitoring jobs scheduled (1h, 4h: PentaScore, 4h: F&G)")
 
     def run(self):
         """Start the bot with auto monitoring."""
