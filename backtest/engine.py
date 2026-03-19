@@ -26,6 +26,7 @@ class BacktestEngine:
         df["sma_7"] = df["close"].rolling(window=7).mean()
         df["sma_25"] = df["close"].rolling(window=25).mean()
         df["sma_99"] = df["close"].rolling(window=99).mean()
+        df["sma_200"] = df["close"].rolling(window=200).mean()
 
         # RSI
         delta = df["close"].diff()
@@ -123,18 +124,36 @@ class BacktestEngine:
 
         return scores
 
-    def run(self, df: pd.DataFrame, buy_threshold: int = 3, sell_threshold: int = -3) -> dict:
+    def run(self, df: pd.DataFrame, buy_threshold: int = 3, sell_threshold: int = -3,
+            trend_filter: bool = False) -> dict:
         """
         Run backtest on OHLCV DataFrame.
+
+        Args:
+            trend_filter: If True, suppress signal-based SELL and TP when price > SMA200 (uptrend).
+                         SL still active for risk management.
 
         Returns dict with trades, equity curve, and performance metrics.
         """
         df = df.copy()
         df = self._calc_indicators(df)
-        df = df.dropna().reset_index(drop=True)
+        # Drop rows where core indicators are NaN, but keep sma_200 NaN rows
+        # (sma_200 needs 200 candles; it's checked for NaN at point of use)
+        core_cols = [c for c in df.columns if c != "sma_200" and df[c].dtype != object]
+        df = df.dropna(subset=core_cols).reset_index(drop=True)
 
         if len(df) < 10:
             return {"error": "Not enough data for backtesting"}
+
+        # When trend filter is active, skip warmup bars where SMA200 is still NaN
+        # so the filter is never "silently inactive" during simulation
+        if trend_filter:
+            first_valid = df["sma_200"].first_valid_index()
+            if first_valid is None:
+                return {"error": "Not enough data for SMA200 warmup (need 200+ candles)"}
+            start_bar = max(1, first_valid)
+        else:
+            start_bar = 1
 
         capital = self.initial_capital
         position = 0.0  # BTC held
@@ -142,15 +161,19 @@ class BacktestEngine:
         trades = []
         equity_curve = []
 
-        for i in range(1, len(df)):
+        for i in range(start_bar, len(df)):
             row = df.iloc[i]
             price = row["close"]
+            exited_this_bar = False
+
+            # Determine if in uptrend (for trend filter)
+            in_uptrend = trend_filter and not pd.isna(row.get("sma_200", float("nan"))) and price > row["sma_200"]
 
             # Check stop loss / take profit if in position
             if position > 0:
                 pnl_pct = (price - entry_price) / entry_price
                 if pnl_pct <= -self.stop_loss_pct:
-                    # Stop loss hit
+                    # Stop loss hit (always active)
                     sell_value = position * price * (1 - self.fee_pct)
                     profit = sell_value - (position * entry_price)
                     trades.append({
@@ -164,8 +187,9 @@ class BacktestEngine:
                     capital += sell_value
                     position = 0.0
                     entry_price = 0.0
-                elif pnl_pct >= self.take_profit_pct:
-                    # Take profit hit
+                    exited_this_bar = True
+                elif pnl_pct >= self.take_profit_pct and not in_uptrend:
+                    # Take profit hit (suppressed in uptrend to let profits run)
                     sell_value = position * price * (1 - self.fee_pct)
                     profit = sell_value - (position * entry_price)
                     trades.append({
@@ -179,13 +203,14 @@ class BacktestEngine:
                     capital += sell_value
                     position = 0.0
                     entry_price = 0.0
+                    exited_this_bar = True
 
             # Score signals
             scores = self._score_at(df, i)
             total = sum(scores.values())
 
-            # Trading logic
-            if total >= buy_threshold and position == 0 and capital > 0:
+            # Trading logic (skip if we just exited to prevent same-bar re-entry)
+            if not exited_this_bar and total >= buy_threshold and position == 0 and capital > 0:
                 # BUY
                 buy_amount = capital * (1 - self.fee_pct)
                 position = buy_amount / price
@@ -201,21 +226,24 @@ class BacktestEngine:
                 capital = 0.0
 
             elif total <= sell_threshold and position > 0:
-                # SELL signal
-                sell_value = position * price * (1 - self.fee_pct)
-                profit = sell_value - (position * entry_price)
-                pnl_pct = (price - entry_price) / entry_price
-                trades.append({
-                    "type": "SELL",
-                    "timestamp": row["timestamp"],
-                    "price": price,
-                    "amount": position,
-                    "profit": profit,
-                    "profit_pct": pnl_pct * 100,
-                })
-                capital += sell_value
-                position = 0.0
-                entry_price = 0.0
+                if in_uptrend:
+                    pass  # Suppress sell signal in uptrend — hold position
+                else:
+                    # SELL signal
+                    sell_value = position * price * (1 - self.fee_pct)
+                    profit = sell_value - (position * entry_price)
+                    pnl_pct = (price - entry_price) / entry_price
+                    trades.append({
+                        "type": "SELL",
+                        "timestamp": row["timestamp"],
+                        "price": price,
+                        "amount": position,
+                        "profit": profit,
+                        "profit_pct": pnl_pct * 100,
+                    })
+                    capital += sell_value
+                    position = 0.0
+                    entry_price = 0.0
 
             # Track equity
             total_equity = capital + (position * price)
@@ -241,6 +269,11 @@ class BacktestEngine:
             })
             capital += sell_value
             position = 0.0
+            equity_curve.append({
+                "timestamp": df.iloc[-1]["timestamp"],
+                "equity": capital,
+                "price": final_price,
+            })
 
         # Calculate metrics
         metrics = self._calc_metrics(trades, equity_curve)
@@ -308,6 +341,364 @@ class BacktestEngine:
             "sharpe_ratio": round(sharpe, 2),
         }
 
+    def run_druckenmiller(self, df: pd.DataFrame, buy_threshold: int = 3,
+                          sell_threshold: int = -3, trailing_stop_pct: float = 5.0,
+                          initial_stop_pct: float = 2.0, max_pyramids: int = 3) -> dict:
+        """
+        Druckenmiller-style backtest: conviction-based position sizing + pyramiding.
+
+        Key principles:
+        - Position size scales with signal strength (33%/66%/100%)
+        - Pyramiding: add to winners when signals stay strong
+        - Tight initial stop loss, trailing stop for profits
+        - No fixed take profit — let winners run
+
+        Args:
+            trailing_stop_pct: Trailing stop from highest price (default 5%)
+            initial_stop_pct: Initial stop loss before any profit (default 2%)
+            max_pyramids: Maximum number of additional entries (default 3)
+        """
+        df = df.copy()
+        df = self._calc_indicators(df)
+        core_cols = [c for c in df.columns if c != "sma_200" and df[c].dtype != object]
+        df = df.dropna(subset=core_cols).reset_index(drop=True)
+
+        if len(df) < 10:
+            return {"error": "Not enough data for backtesting"}
+
+        capital = self.initial_capital
+        position = 0.0  # Total BTC held
+        avg_entry = 0.0  # Weighted average entry price
+        highest_price = 0.0  # Highest price since entry (for trailing stop)
+        pyramid_count = 0  # Number of additional entries
+        total_invested = 0.0  # Total USD invested in current position
+        trades = []
+        equity_curve = []
+
+        trailing_pct = trailing_stop_pct / 100
+        init_stop_pct = initial_stop_pct / 100
+
+        def _position_size_pct(score: int) -> float:
+            """Determine position size based on signal conviction."""
+            abs_score = abs(score)
+            if abs_score >= 7:
+                return 1.0   # 100% — high conviction
+            elif abs_score >= 5:
+                return 0.66  # 66% — medium conviction
+            elif abs_score >= buy_threshold:
+                return 0.33  # 33% — low conviction
+            return 0.0
+
+        for i in range(1, len(df)):
+            row = df.iloc[i]
+            price = row["close"]
+            exited_this_bar = False
+
+            # Update trailing stop tracker
+            if position > 0 and price > highest_price:
+                highest_price = price
+
+            # Check exit conditions if in position
+            if position > 0:
+                pnl_pct = (price - avg_entry) / avg_entry
+
+                # Initial stop loss (before we have meaningful profit)
+                if pnl_pct <= -init_stop_pct:
+                    sell_value = position * price * (1 - self.fee_pct)
+                    profit = sell_value - total_invested
+                    trades.append({
+                        "type": "SELL (SL)",
+                        "timestamp": row["timestamp"],
+                        "price": price,
+                        "amount": position,
+                        "profit": profit,
+                        "profit_pct": pnl_pct * 100,
+                    })
+                    capital += sell_value
+                    position = 0.0
+                    avg_entry = 0.0
+                    highest_price = 0.0
+                    pyramid_count = 0
+                    total_invested = 0.0
+                    exited_this_bar = True
+
+                # Trailing stop (from highest since entry)
+                elif highest_price > 0 and price <= highest_price * (1 - trailing_pct):
+                    sell_value = position * price * (1 - self.fee_pct)
+                    profit = sell_value - total_invested
+                    trades.append({
+                        "type": "SELL (TS)",
+                        "timestamp": row["timestamp"],
+                        "price": price,
+                        "amount": position,
+                        "profit": profit,
+                        "profit_pct": pnl_pct * 100,
+                    })
+                    capital += sell_value
+                    position = 0.0
+                    avg_entry = 0.0
+                    highest_price = 0.0
+                    pyramid_count = 0
+                    total_invested = 0.0
+                    exited_this_bar = True
+
+            # Score signals
+            scores = self._score_at(df, i)
+            total = sum(scores.values())
+
+            # Entry / Pyramid logic (skip if we just exited to prevent same-bar re-entry)
+            if not exited_this_bar and total >= buy_threshold and capital > 0:
+                size_pct = _position_size_pct(total)
+
+                if position == 0:
+                    # Initial entry
+                    invest_usd = capital * size_pct
+                    buy_amount = invest_usd * (1 - self.fee_pct)
+                    new_coins = buy_amount / price
+                    position = new_coins
+                    avg_entry = price
+                    highest_price = price
+                    total_invested = invest_usd
+                    capital -= invest_usd
+                    pyramid_count = 0
+                    trades.append({
+                        "type": f"BUY ({int(size_pct*100)}%)",
+                        "timestamp": row["timestamp"],
+                        "price": price,
+                        "amount": new_coins,
+                        "profit": 0,
+                        "profit_pct": 0,
+                    })
+
+                elif pyramid_count < max_pyramids and price > avg_entry:
+                    # Pyramid: add to winning position
+                    invest_usd = capital * size_pct * 0.5  # Half the normal size for pyramids
+                    if invest_usd > 10:  # Minimum $10 to avoid dust
+                        buy_amount = invest_usd * (1 - self.fee_pct)
+                        new_coins = buy_amount / price
+                        # Update weighted average entry
+                        avg_entry = (avg_entry * position + price * new_coins) / (position + new_coins)
+                        position += new_coins
+                        total_invested += invest_usd
+                        capital -= invest_usd
+                        pyramid_count += 1
+                        trades.append({
+                            "type": f"PYRAMID #{pyramid_count}",
+                            "timestamp": row["timestamp"],
+                            "price": price,
+                            "amount": new_coins,
+                            "profit": 0,
+                            "profit_pct": 0,
+                        })
+
+            # Signal-based exit
+            elif total <= sell_threshold and position > 0:
+                sell_value = position * price * (1 - self.fee_pct)
+                profit = sell_value - total_invested
+                pnl_pct = (price - avg_entry) / avg_entry
+                trades.append({
+                    "type": "SELL (SIG)",
+                    "timestamp": row["timestamp"],
+                    "price": price,
+                    "amount": position,
+                    "profit": profit,
+                    "profit_pct": pnl_pct * 100,
+                })
+                capital += sell_value
+                position = 0.0
+                avg_entry = 0.0
+                highest_price = 0.0
+                pyramid_count = 0
+                total_invested = 0.0
+
+            # Track equity
+            total_equity = capital + (position * price)
+            equity_curve.append({
+                "timestamp": row["timestamp"],
+                "equity": total_equity,
+                "price": price,
+            })
+
+        # Close any open position at end
+        if position > 0:
+            final_price = df.iloc[-1]["close"]
+            sell_value = position * final_price * (1 - self.fee_pct)
+            profit = sell_value - total_invested
+            pnl_pct = (final_price - avg_entry) / avg_entry
+            trades.append({
+                "type": "SELL (END)",
+                "timestamp": df.iloc[-1]["timestamp"],
+                "price": final_price,
+                "amount": position,
+                "profit": profit,
+                "profit_pct": pnl_pct * 100,
+            })
+            capital += sell_value
+            position = 0.0
+            equity_curve.append({
+                "timestamp": df.iloc[-1]["timestamp"],
+                "equity": capital,
+                "price": final_price,
+            })
+
+        metrics = self._calc_metrics(trades, equity_curve)
+
+        # Add Druckenmiller-specific metrics
+        pyramid_trades = [t for t in trades if t["type"].startswith("PYRAMID")]
+        buy_trades = [t for t in trades if t["type"].startswith("BUY")]
+        metrics["pyramid_entries"] = len(pyramid_trades)
+        metrics["initial_entries"] = len(buy_trades)
+        metrics["avg_pyramids_per_trade"] = (
+            round(len(pyramid_trades) / len(buy_trades), 1) if buy_trades else 0
+        )
+
+        return {
+            "trades": trades,
+            "equity_curve": equity_curve,
+            "metrics": metrics,
+        }
+
+    def run_dca(self, df: pd.DataFrame, interval_candles: int = 24,
+                mode: str = "regular") -> dict:
+        """
+        Run DCA backtest.
+
+        Args:
+            interval_candles: Buy interval (e.g., 24 = daily on 1h chart)
+            mode: "regular" (fixed amount), "sma" (buy more below SMA200),
+                  "drawdown" (buy more on drawdown from ATH),
+                  "rsi" (buy more when RSI is low)
+        """
+        df = df.copy()
+        df = self._calc_indicators(df)
+
+        # Only drop NaN for indicators the chosen mode actually uses
+        if mode == "sma":
+            warmup_cols = ["sma_200"]
+        elif mode == "rsi":
+            warmup_cols = ["rsi"]
+        else:
+            # "regular" and "drawdown" don't need any indicators
+            warmup_cols = []
+
+        if warmup_cols:
+            df = df.dropna(subset=warmup_cols).reset_index(drop=True)
+        else:
+            df = df.dropna(subset=["close"]).reset_index(drop=True)
+
+        if len(df) < 10:
+            return {"error": "Not enough data"}
+
+        buy_indices = list(range(0, len(df), interval_candles))
+        num_buys = len(buy_indices)
+
+        if mode == "regular":
+            amounts = [self.initial_capital / num_buys] * num_buys
+
+        elif mode == "sma":
+            weights = []
+            for idx in buy_indices:
+                price = df.iloc[idx]["close"]
+                sma200 = df.iloc[idx].get("sma_200", float("nan"))
+                if pd.isna(sma200):
+                    sma200 = price
+                ratio = sma200 / price
+                ratio = max(0.2, min(3.0, ratio))
+                weights.append(ratio)
+            total_weight = sum(weights)
+            amounts = [self.initial_capital * w / total_weight for w in weights]
+
+        elif mode == "drawdown":
+            weights = []
+            ath = 0
+            for idx in buy_indices:
+                price = df.iloc[idx]["close"]
+                if price > ath:
+                    ath = price
+                dd = (ath - price) / ath if ath > 0 else 0
+                weight = 1.0 + dd * 5  # 0% dd = 1x, 20% dd = 2x, 50% dd = 3.5x
+                weights.append(weight)
+            total_weight = sum(weights)
+            amounts = [self.initial_capital * w / total_weight for w in weights]
+
+        elif mode == "rsi":
+            weights = []
+            for idx in buy_indices:
+                rsi = df.iloc[idx].get("rsi", 50)
+                if pd.isna(rsi):
+                    rsi = 50
+                # RSI 30 = 2.3x, RSI 50 = 1x, RSI 70 = 0.3x
+                weight = max(0.1, (100 - rsi) / 30)
+                weights.append(weight)
+            total_weight = sum(weights)
+            amounts = [self.initial_capital * w / total_weight for w in weights]
+
+        else:
+            return {"error": f"Unknown DCA mode: {mode}"}
+
+        # Execute DCA
+        position = 0.0
+        total_invested = 0.0
+        remaining_cash = self.initial_capital
+        equity_curve = []
+        trades = []
+        amount_map = dict(zip(buy_indices, amounts))
+
+        for i in range(len(df)):
+            price = df.iloc[i]["close"]
+
+            if i in amount_map:
+                buy_usd = amount_map[i]
+                buy_after_fee = buy_usd * (1 - self.fee_pct)
+                coins = buy_after_fee / price
+                position += coins
+                total_invested += buy_usd
+                remaining_cash -= buy_usd
+                trades.append({
+                    "type": "BUY",
+                    "timestamp": df.iloc[i]["timestamp"],
+                    "price": price,
+                    "amount": coins,
+                    "usd_amount": round(buy_usd, 2),
+                    "profit": 0,
+                    "profit_pct": 0,
+                })
+
+            total_equity = position * price + remaining_cash
+            equity_curve.append({
+                "timestamp": df.iloc[i]["timestamp"],
+                "equity": total_equity,
+                "price": price,
+            })
+
+        final_value = position * df.iloc[-1]["close"] + remaining_cash
+        total_return = (final_value - self.initial_capital) / self.initial_capital * 100
+        avg_buy_price = self.initial_capital / position if position > 0 else 0
+
+        # Max drawdown
+        equities = [e["equity"] for e in equity_curve]
+        peak = equities[0] if equities else 0
+        max_dd = 0
+        for eq in equities:
+            if eq > peak:
+                peak = eq
+            dd = (peak - eq) / peak * 100 if peak > 0 else 0
+            if dd > max_dd:
+                max_dd = dd
+
+        metrics = {
+            "initial_capital": self.initial_capital,
+            "final_equity": round(final_value, 2),
+            "total_return_pct": round(total_return, 2),
+            "total_trades": len(trades),
+            "avg_buy_price": round(avg_buy_price, 2),
+            "total_invested": round(total_invested, 2),
+            "max_drawdown_pct": round(max_dd, 2),
+            "position_btc": position,
+        }
+
+        return {"trades": trades, "equity_curve": equity_curve, "metrics": metrics}
+
     def print_report(self, result: dict):
         """Print a formatted backtest report."""
         if "error" in result:
@@ -325,14 +716,25 @@ class BacktestEngine:
         print(f"  Total Return:     {m['total_return_pct']:+.2f}%")
         print("-" * 60)
         print(f"  Total Trades:     {m['total_trades']}")
-        print(f"  Win / Loss:       {m['winning_trades']} / {m['losing_trades']}")
-        print(f"  Win Rate:         {m['win_rate_pct']:.1f}%")
-        print(f"  Avg Win:          ${m['avg_win']:,.2f}")
-        print(f"  Avg Loss:         ${m['avg_loss']:,.2f}")
-        print(f"  Profit Factor:    {m['profit_factor']:.2f}")
+
+        # Trade-level metrics (from _calc_metrics; absent in DCA results)
+        if "winning_trades" in m:
+            print(f"  Win / Loss:       {m['winning_trades']} / {m['losing_trades']}")
+            print(f"  Win Rate:         {m['win_rate_pct']:.1f}%")
+            print(f"  Avg Win:          ${m['avg_win']:,.2f}")
+            print(f"  Avg Loss:         ${m['avg_loss']:,.2f}")
+            print(f"  Profit Factor:    {m['profit_factor']:.2f}")
+
+        # DCA-specific metrics
+        if "avg_buy_price" in m:
+            print(f"  Avg Buy Price:    ${m['avg_buy_price']:,.2f}")
+            print(f"  Total Invested:   ${m['total_invested']:,.2f}")
+            print(f"  Position (BTC):   {m['position_btc']:.6f}")
+
         print("-" * 60)
         print(f"  Max Drawdown:     {m['max_drawdown_pct']:.2f}%")
-        print(f"  Sharpe Ratio:     {m['sharpe_ratio']:.2f}")
+        if "sharpe_ratio" in m:
+            print(f"  Sharpe Ratio:     {m['sharpe_ratio']:.2f}")
         print("=" * 60)
 
         if trades:

@@ -26,5 +26,7 @@ Thumbs.db
 logs/
 
 # Data
-data/*.csv
-data/*.json
+data/
+
+# macOS app bundle
+Kkabi_Trading.app/
