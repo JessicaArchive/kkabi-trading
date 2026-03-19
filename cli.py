@@ -7,7 +7,7 @@ Node.js (trading.ts) 에서 호출:
 Actions:
   show_config          현재 트레이딩 설정 출력
   show_price [SYMBOL]  현재 가격 조회
-  analyze [SYMBOL]     PentaScore + Fear&Greed 분석
+  analyze [SYMBOL]     5개 전략 멀티 시그널 분석
   backtest [--days N]  백테스트 실행
 """
 
@@ -76,41 +76,69 @@ def show_price(symbol: Optional[str] = None):
     print("\n".join(lines))
 
 
+def _run_strategy(name: str, client, symbol: str) -> dict:
+    """전략 하나를 실행하고 결과 반환. 실패 시 NO_DATA."""
+    try:
+        s = create_strategy(name, client, symbol)
+        return s.analyze(Config.TIMEFRAME)
+    except Exception:
+        return {"signal": "NO_DATA", "scores": {}, "total": 0, "details": {}}
+
+
+# 전략 목록: (key, 표시이름, 최대점수)
+STRATEGY_LIST = [
+    ("base", "PentaScore", 9),
+    ("fear_greed", "FearGreed", 2),
+    ("ichimoku", "Ichimoku", 8),
+    ("mean_reversion", "MeanRevert", 10),
+    ("breakout_hunter", "Breakout", 10),
+]
+
+
 def analyze(symbol: Optional[str] = None):
     symbol = symbol or Config.SYMBOL
     client = _make_client()
 
-    # PentaScore 분석
-    penta = create_strategy("base", client, symbol)
-    penta_result = penta.analyze(Config.TIMEFRAME)
+    # 전 전략 분석
+    results = {}
+    for name, _, _ in STRATEGY_LIST:
+        results[name] = _run_strategy(name, client, symbol)
 
-    # Fear & Greed 분석
-    try:
-        fg = create_strategy("fear_greed", client, symbol)
-        fg_result = fg.analyze(Config.TIMEFRAME)
-    except Exception:
-        fg_result = {"signal": "NO_DATA", "scores": {}, "total": 0, "details": {}}
-
-    # 결과 포맷
-    p = penta_result
-    f = fg_result
+    p = results["base"]
     d = p.get("details", {})
-
-    emoji = _signal_emoji(p["signal"])
     price = d.get("price", 0)
-    scores = p.get("scores", {})
-    total = p.get("total", 0)
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     lines = [
         f"📊 {symbol} 분석 ({now})",
         f"━━━━━━━━━━━━━━━━━━━━",
         f"  가격: ${price:,.2f}",
-        f"  신호: {emoji} {p['signal']} (총점: {total:+d}/9)",
         f"",
-        f"📈 PentaScore 지표별 점수:",
+        f"🎯 전략별 시그널:",
     ]
+
+    # 전략 요약 테이블
+    buy_count = 0
+    sell_count = 0
+    for name, label, max_score in STRATEGY_LIST:
+        r = results[name]
+        sig = r.get("signal", "NO_DATA")
+        total = r.get("total", 0)
+        emoji = _signal_emoji(sig)
+        lines.append(f"  {emoji} {label:<13} {sig:<5} ({total:+d}/{max_score})")
+        if sig == "BUY":
+            buy_count += 1
+        elif sig == "SELL":
+            sell_count += 1
+
+    # 합산 판정
+    lines.append(f"")
+    lines.append(f"  📢 BUY: {buy_count}개 / SELL: {sell_count}개 / 5개 전략")
+
+    # PentaScore 세부
+    scores = p.get("scores", {})
+    lines.append(f"")
+    lines.append(f"📈 PentaScore 지표별:")
 
     indicator_names = {
         "sma": ("SMA", "이동평균"),
@@ -140,16 +168,41 @@ def analyze(symbol: Optional[str] = None):
         if "vol_ratio" in d:
             lines.append(f"  거래량 비율: {d['vol_ratio']:.2f}x")
 
-    # Fear & Greed
-    fd = f.get("details", {})
+    # Fear & Greed 세부
+    fg = results["fear_greed"]
+    fd = fg.get("details", {})
     if fd.get("fng_value") is not None:
         fng_val = fd["fng_value"]
         fng_label = fd.get("fng_label", "")
-        fg_score = f.get("total", 0)
-        fg_emoji = _signal_emoji(f["signal"])
         lines.append("")
         lines.append(f"😱 공포탐욕지수: {fng_val}/100 ({fng_label})")
-        lines.append(f"  역발상 신호: {fg_emoji} {f['signal']} (점수: {fg_score:+d})")
+
+    # Ichimoku 세부
+    ichi = results["ichimoku"]
+    id_ = ichi.get("details", {})
+    if id_.get("tenkan") is not None:
+        lines.append("")
+        lines.append(f"⛩️ Ichimoku:")
+        lines.append(f"  전환선: ${id_['tenkan']:,.2f} / 기준선: ${id_['kijun']:,.2f}")
+        lines.append(f"  구름: ${id_['cloud_bottom']:,.2f} ~ ${id_['cloud_top']:,.2f}")
+
+    # MeanRevert 세부
+    mr = results["mean_reversion"]
+    md = mr.get("details", {})
+    if md.get("zscore") is not None:
+        lines.append("")
+        lines.append(f"📉 MeanRevert:")
+        lines.append(f"  Z-Score: {md['zscore']:+.3f} / StochRSI: {md.get('stoch_rsi_k', 0):.3f}")
+        lines.append(f"  Keltner위치: {md.get('kc_position', 0):.1%}")
+
+    # Breakout 세부
+    bo = results["breakout_hunter"]
+    bd = bo.get("details", {})
+    if bd.get("adx") is not None:
+        lines.append("")
+        lines.append(f"💥 Breakout:")
+        lines.append(f"  ADX: {bd['adx']:.1f} / Squeeze: {'ON' if bd.get('squeeze_on') else 'OFF'}")
+        lines.append(f"  Donchian위치: {bd.get('dc_position', 0):.1%}")
 
     print("\n".join(lines))
 
