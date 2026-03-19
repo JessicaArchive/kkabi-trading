@@ -400,7 +400,8 @@ class BacktestEngine:
 
             # Check exit conditions if in position
             if position > 0:
-                pnl_pct = (price - avg_entry) / avg_entry
+                effective_entry = total_invested / position
+                pnl_pct = (price * (1 - self.fee_pct) - effective_entry) / effective_entry
 
                 # Initial stop loss (before we have meaningful profit)
                 if pnl_pct <= -init_stop_pct:
@@ -470,7 +471,7 @@ class BacktestEngine:
                         "profit_pct": 0,
                     })
 
-                elif pyramid_count < max_pyramids and price > avg_entry:
+                elif pyramid_count < max_pyramids and price * (1 - self.fee_pct) > total_invested / position:
                     # Pyramid: add to winning position
                     invest_usd = capital * size_pct * 0.5  # Half the normal size for pyramids
                     if invest_usd > 10:  # Minimum $10 to avoid dust
@@ -495,7 +496,8 @@ class BacktestEngine:
             elif total <= sell_threshold and position > 0:
                 sell_value = position * price * (1 - self.fee_pct)
                 profit = sell_value - total_invested
-                pnl_pct = (price - avg_entry) / avg_entry
+                effective_entry = total_invested / position
+                pnl_pct = (price * (1 - self.fee_pct) - effective_entry) / effective_entry
                 trades.append({
                     "type": "SELL (SIG)",
                     "timestamp": row["timestamp"],
@@ -524,7 +526,8 @@ class BacktestEngine:
             final_price = df.iloc[-1]["close"]
             sell_value = position * final_price * (1 - self.fee_pct)
             profit = sell_value - total_invested
-            pnl_pct = (final_price - avg_entry) / avg_entry
+            effective_entry = total_invested / position
+            pnl_pct = (final_price * (1 - self.fee_pct) - effective_entry) / effective_entry
             trades.append({
                 "type": "SELL (END)",
                 "timestamp": df.iloc[-1]["timestamp"],

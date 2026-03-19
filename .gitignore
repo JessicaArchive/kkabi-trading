@@ -21,6 +21,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# Runtime
+.bot.pid
+
 # Logs
 *.log
 logs/

@@ -71,7 +71,7 @@ def main():
     parser.add_argument("--trend-filter", action="store_true", help="Enable trend filter (suppress SELL/TP in uptrend, SMA200)")
     parser.add_argument("--druckenmiller", action="store_true", help="Run Druckenmiller-style strategy")
     parser.add_argument("--trailing-stop", type=float, default=5.0, help="Trailing stop %% (Druckenmiller, default: 5)")
-    parser.add_argument("--initial-stop", type=float, default=2.0, help="Initial stop loss %% (Druckenmiller, default: 2)")
+    parser.add_argument("--initial-stop", type=float, default=2.0, help="Initial stop loss %% (Druckenmiller, default: 2, must be > ~0.2%% round-trip fee)")
     parser.add_argument("--max-pyramids", type=int, default=3, help="Max pyramid entries (Druckenmiller, default: 3)")
     args = parser.parse_args()
 
@@ -112,6 +112,13 @@ def main():
     )
 
     if args.druckenmiller:
+        # Warn if initial-stop is smaller than round-trip fee cost (~0.2% at 0.1% fee)
+        round_trip_fee = engine.fee_pct * 2 * 100  # back to percentage
+        if args.initial_stop <= round_trip_fee:
+            logger.warning(
+                f"--initial-stop {args.initial_stop}% <= round-trip fee ~{round_trip_fee:.1f}%: "
+                f"positions will stop out immediately at flat prices. Consider a larger value."
+            )
         logger.info(f"Running Druckenmiller backtest: {args.symbol} | {args.timeframe} | {args.days} days | ${args.capital:,.0f}")
         result = engine.run_druckenmiller(
             df, buy_threshold=args.buy_threshold, sell_threshold=args.sell_threshold,

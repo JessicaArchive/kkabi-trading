@@ -76,8 +76,11 @@ def show_price(symbol: Optional[str] = None):
     print("\n".join(lines))
 
 
-def _run_strategy(name: str, client, symbol: str) -> dict:
-    """전략 하나를 실행하고 결과 반환. 실패 시 NO_DATA."""
+def _run_strategy(name: str, client, symbol: str, *, allow_fail: bool = False) -> dict:
+    """전략 하나를 실행하고 결과 반환. allow_fail=True 시 실패하면 NO_DATA."""
+    if not allow_fail:
+        s = create_strategy(name, client, symbol)
+        return s.analyze(Config.TIMEFRAME)
     try:
         s = create_strategy(name, client, symbol)
         return s.analyze(Config.TIMEFRAME)
@@ -99,10 +102,10 @@ def analyze(symbol: Optional[str] = None):
     symbol = symbol or Config.SYMBOL
     client = _make_client()
 
-    # 전 전략 분석
+    # 전 전략 분석 (base는 실패 시 전파, 나머지는 graceful degradation)
     results = {}
     for name, _, _ in STRATEGY_LIST:
-        results[name] = _run_strategy(name, client, symbol)
+        results[name] = _run_strategy(name, client, symbol, allow_fail=(name != "base"))
 
     p = results["base"]
     d = p.get("details", {})
