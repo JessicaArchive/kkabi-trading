@@ -20,7 +20,7 @@ logger = setup_logger(__name__)
 
 
 def fetch_historical_data(client: ExchangeClient, symbol: str,
-                          timeframe: str, days: int) -> pd.DataFrame:
+                          timeframe: str, days: float) -> pd.DataFrame:
     """Fetch historical OHLCV data from exchange."""
     # Calculate how many candles we need
     tf_hours = {"1m": 1/60, "5m": 5/60, "15m": 0.25, "30m": 0.5,
@@ -68,7 +68,27 @@ def main():
     parser.add_argument("--take-profit", type=float, default=Config.TAKE_PROFIT_PERCENT, help="Take profit %%")
     parser.add_argument("--buy-threshold", type=int, default=3, help="Buy score threshold")
     parser.add_argument("--sell-threshold", type=int, default=-3, help="Sell score threshold")
+    parser.add_argument("--trend-filter", action="store_true", help="Enable trend filter (suppress SELL/TP in uptrend, SMA200)")
+    parser.add_argument("--druckenmiller", action="store_true", help="Run Druckenmiller-style strategy")
+    parser.add_argument("--trailing-stop", type=float, default=5.0, help="Trailing stop %% (Druckenmiller, default: 5)")
+    parser.add_argument("--initial-stop", type=float, default=2.0, help="Initial stop loss %% (Druckenmiller, default: 2)")
+    parser.add_argument("--max-pyramids", type=int, default=3, help="Max pyramid entries (Druckenmiller, default: 3)")
     args = parser.parse_args()
+
+    # Auto-extend history when --trend-filter needs SMA200 warmup
+    fetch_days = args.days
+    if args.trend_filter and args.druckenmiller:
+        logger.warning("--trend-filter is not supported with --druckenmiller (uses trailing stops instead). Ignoring --trend-filter.")
+        args.trend_filter = False
+    if args.trend_filter:
+        tf_hours = {"1m": 1/60, "5m": 5/60, "15m": 0.25, "30m": 0.5,
+                    "1h": 1, "4h": 4, "1d": 24}
+        hpc = tf_hours.get(args.timeframe, 1)
+        warmup_days = 200 * hpc / 24  # exact fractional days for 200 candles
+        fetch_days = args.days + warmup_days
+        logger.info(
+            f"--trend-filter: fetching {fetch_days:.1f} days ({args.days} requested + {warmup_days:.1f}d SMA200 warmup)"
+        )
 
     # Connect to exchange (public API, no keys needed for OHLCV)
     client = ExchangeClient(
@@ -77,8 +97,8 @@ def main():
         api_secret=Config.API_SECRET,
     )
 
-    # Fetch data
-    df = fetch_historical_data(client, args.symbol, args.timeframe, args.days)
+    # Fetch data (fetch_days includes warmup when --trend-filter is active)
+    df = fetch_historical_data(client, args.symbol, args.timeframe, fetch_days)
 
     if df.empty:
         logger.error("No data fetched. Check your connection and symbol.")
@@ -91,8 +111,17 @@ def main():
         take_profit_pct=args.take_profit,
     )
 
-    logger.info(f"Running backtest: {args.symbol} | {args.timeframe} | {args.days} days | ${args.capital:,.0f}")
-    result = engine.run(df, buy_threshold=args.buy_threshold, sell_threshold=args.sell_threshold)
+    if args.druckenmiller:
+        logger.info(f"Running Druckenmiller backtest: {args.symbol} | {args.timeframe} | {args.days} days | ${args.capital:,.0f}")
+        result = engine.run_druckenmiller(
+            df, buy_threshold=args.buy_threshold, sell_threshold=args.sell_threshold,
+            trailing_stop_pct=args.trailing_stop, initial_stop_pct=args.initial_stop,
+            max_pyramids=args.max_pyramids,
+        )
+    else:
+        logger.info(f"Running backtest: {args.symbol} | {args.timeframe} | {args.days} days | ${args.capital:,.0f}")
+        result = engine.run(df, buy_threshold=args.buy_threshold, sell_threshold=args.sell_threshold,
+                            trend_filter=args.trend_filter)
 
     # Print report
     engine.print_report(result)
