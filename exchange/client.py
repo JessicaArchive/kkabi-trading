@@ -33,11 +33,40 @@ class ExchangeClient:
             return None
 
     def get_ohlcv(self, symbol: str, timeframe: str = "1h", limit: int = 100) -> list:
+        # 업비트는 1회 응답 최대 200개. limit > 200 이면 페이지네이션으로 합침.
+        # limit <= 200 이면 단일 호출 (backward compatible).
         try:
-            return self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            if limit <= 200:
+                return self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            return self._fetch_ohlcv_paginated(symbol, timeframe, limit)
         except Exception as e:
             logger.error(f"Failed to fetch OHLCV: {e}")
             return []
+
+    def _fetch_ohlcv_paginated(self, symbol: str, timeframe: str, limit: int) -> list:
+        """200개 초과 시 'to' 파라미터로 과거 방향 페이지네이션."""
+        BATCH = 200
+        all_candles: list = []
+        # 첫 호출: 최신 200개
+        batch = self.exchange.fetch_ohlcv(symbol, timeframe, limit=BATCH)
+        if not batch:
+            return []
+        all_candles = list(batch)
+        # 추가 호출: 가장 오래된 봉 시각 직전부터 또 200개
+        while len(all_candles) < limit:
+            oldest_ms = all_candles[0][0]
+            params = {"to": self.exchange.iso8601(oldest_ms)}
+            more = self.exchange.fetch_ohlcv(symbol, timeframe, limit=BATCH, params=params)
+            if not more:
+                break
+            # 중복 제거 (oldest와 겹칠 수 있음)
+            more = [c for c in more if c[0] < oldest_ms]
+            if not more:
+                break
+            all_candles = list(more) + all_candles
+        # 시간 순 보장 + limit으로 자르기
+        all_candles.sort(key=lambda c: c[0])
+        return all_candles[-limit:]
 
     def get_balance(self) -> dict | None:
         if not self.authenticated:
