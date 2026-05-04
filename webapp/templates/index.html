@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1A1A1A">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Kkabi 페이퍼">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+  <title>Kkabi 페이퍼</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background-color: #1A1A1A; color: #E0E0E0; font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo", sans-serif; }
+    .card { background-color: #222222; border-color: #333333; }
+    .num { font-variant-numeric: tabular-nums; }
+    .up { color: #D24F45; }   /* 한국 컨벤션: 빨강 = 수익 */
+    .down { color: #1261C4; } /* 파랑 = 손실 */
+    .muted { color: #888888; }
+    .accent { color: #F2A900; }
+    a { -webkit-tap-highlight-color: transparent; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-2xl mx-auto p-4 pb-20">
+
+    <!-- 헤더 -->
+    <header class="flex items-center justify-between mb-4">
+      <div>
+        <h1 class="text-xl font-semibold">Kkabi 페이퍼</h1>
+        <div class="text-xs muted">{{ now.strftime("%Y-%m-%d %H:%M") }} · BTC/KRW</div>
+      </div>
+      <div class="text-right">
+        {% if current_price %}
+          <div class="text-sm muted">현재가</div>
+          <div class="num text-base">₩{{ "{:,.0f}".format(current_price) }}</div>
+        {% else %}
+          <div class="text-sm down">가격 조회 실패</div>
+        {% endif %}
+      </div>
+    </header>
+
+    <!-- 전체 자산 요약 -->
+    <section class="card border rounded-lg p-4 mb-4">
+      <div class="muted text-sm">내 가상 자산 (합계)</div>
+      <div class="num text-2xl font-bold mt-1">₩{{ "{:,.0f}".format(total_equity) }}</div>
+      <div class="num text-sm mt-1 {% if total_pnl >= 0 %}up{% else %}down{% endif %}">
+        {{ "{:+,.0f}".format(total_pnl) }} ({{ "{:+.2f}".format(total_pnl_pct) }}%)
+      </div>
+      <div class="muted text-xs mt-2">활성 전략 {{ active_count }}개 · 정렬: 수익률 ↓</div>
+    </section>
+
+    <!-- 전략 목록 -->
+    <section class="space-y-2 mb-6">
+      {% for s in strategies %}
+      <div class="card border rounded-lg p-4">
+        <div class="flex items-start justify-between">
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold truncate">{{ s.name }}</div>
+            <div class="muted text-xs mt-1">
+              {% if s.holding %}
+                보유 {{ "{:.8f}".format(s.btc) }} BTC @ ₩{{ "{:,.0f}".format(s.avg_entry_price) }}
+              {% else %}
+                현금만 ₩{{ "{:,.0f}".format(s.cash_krw) }}
+              {% endif %}
+            </div>
+          </div>
+          <div class="text-right ml-3 shrink-0">
+            <div class="num text-base font-semibold {% if s.pnl >= 0 %}up{% else %}down{% endif %}">
+              {{ "{:+,.0f}".format(s.pnl) }}
+            </div>
+            <div class="num text-xs {% if s.pnl >= 0 %}up{% else %}down{% endif %}">
+              {{ "{:+.2f}".format(s.pnl_pct) }}%
+            </div>
+          </div>
+        </div>
+        <div class="muted text-xs mt-2 flex justify-between">
+          <span>평가액 ₩{{ "{:,.0f}".format(s.equity) }}</span>
+          <span>{{ s.started_at.strftime("%m/%d") }} 시작</span>
+        </div>
+      </div>
+      {% else %}
+      <div class="card border rounded-lg p-6 text-center muted">
+        활성 전략 없음. <code>python3 -m paper.manage register &lt;key&gt;</code>로 추가하세요.
+      </div>
+      {% endfor %}
+    </section>
+
+    <!-- 최근 거래 -->
+    {% if recent_trades %}
+    <section class="card border rounded-lg p-4">
+      <div class="muted text-sm mb-3">최근 거래</div>
+      <div class="space-y-2">
+        {% for t in recent_trades %}
+        <div class="flex justify-between text-sm border-t pt-2 first:border-0 first:pt-0" style="border-color: #333333;">
+          <div>
+            <span class="{% if t.side == 'buy' %}up{% else %}down{% endif %} font-medium">
+              {{ '매수' if t.side == 'buy' else '매도' }}
+            </span>
+            <span class="muted text-xs ml-1">{{ t.time.strftime("%m/%d %H:%M") }}</span>
+            <div class="muted text-xs">{{ t.strategy }}</div>
+          </div>
+          <div class="text-right num">
+            <div>₩{{ "{:,.0f}".format(t.price) }}</div>
+            {% if t.realized_pnl is not none %}
+            <div class="text-xs {% if t.realized_pnl >= 0 %}up{% else %}down{% endif %}">
+              {{ "{:+,.0f}".format(t.realized_pnl) }}
+            </div>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <!-- 푸터 -->
+    <footer class="muted text-xs text-center mt-6">
+      <p>새로고침으로 갱신 · 매시 정각 자동 평가</p>
+    </footer>
+  </div>
+</body>
+</html>
