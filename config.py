@@ -21,3 +21,11 @@ class Config:
 
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+    # Upbit Auto-Trading
+    UPBIT_API_KEY = os.getenv("UPBIT_API_KEY", "")
+    UPBIT_SECRET_KEY = os.getenv("UPBIT_SECRET_KEY", "")
+    AUTO_TRADE_SYMBOL = "BTC/KRW"
+    AUTO_TRADE_AMOUNT_KRW = float(os.getenv("AUTO_TRADE_AMOUNT_KRW", "100000"))
+    AUTO_TRADE_INTERVAL = int(os.getenv("AUTO_TRADE_INTERVAL", "3600"))
+    AUTO_TRADE_DRY_RUN = os.getenv("AUTO_TRADE_DRY_RUN", "true").lower() == "true"

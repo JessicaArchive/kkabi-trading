@@ -49,16 +49,48 @@ class ExchangeClient:
             logger.error(f"Failed to fetch balance: {e}")
             return None
 
-    def create_order(self, symbol: str, side: str, amount: float, price: float = None) -> dict | None:
+    def fetch_order(self, order_id: str, symbol: str) -> dict | None:
+        if not self.authenticated:
+            return None
+        try:
+            return self.exchange.fetch_order(order_id, symbol)
+        except Exception as e:
+            logger.error(f"Failed to fetch order {order_id}: {e}")
+            return None
+
+    def create_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float = None,
+        price: float = None,
+        cost: float = None,
+        test: bool = False,
+    ) -> dict | None:
+        """주문 생성. 업비트 KRW 마켓 시장가 매수는 cost(KRW 총액) 기반.
+
+        - 시장가 매수 (KRW 마켓): cost 인자로 KRW 총액 전달
+        - 시장가 매도: amount 인자로 BTC 수량 전달
+        - 지정가: amount + price
+        - test=True 면 업비트 testOrders 엔드포인트로 검증만 (실주문 없음)
+        """
         if not self.authenticated:
             logger.warning("API 키가 없어 주문 불가")
             return None
+        params = {}
+        if test:
+            params["test"] = True
         try:
-            if price:
-                order = self.exchange.create_limit_order(symbol, side, amount, price)
+            if cost is not None and side == "buy":
+                params["cost"] = cost
+                order = self.exchange.create_order(symbol, "market", "buy", None, None, params)
+                logger.info(f"Order created: buy {symbol} cost=₩{cost:,.0f} test={test}")
+            elif price:
+                order = self.exchange.create_order(symbol, "limit", side, amount, price, params)
+                logger.info(f"Order created: {side} {amount} {symbol} @ {price} test={test}")
             else:
-                order = self.exchange.create_market_order(symbol, side, amount)
-            logger.info(f"Order created: {side} {amount} {symbol} @ {price or 'market'}")
+                order = self.exchange.create_order(symbol, "market", side, amount, None, params)
+                logger.info(f"Order created: {side} {amount} {symbol} @ market test={test}")
             return order
         except Exception as e:
             logger.error(f"Failed to create order: {e}")
