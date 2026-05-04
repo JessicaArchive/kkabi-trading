@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1A1A1A">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Kkabi 페이퍼">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+  <title>{{ strategy_name }} · Kkabi 페이퍼</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background-color: #1A1A1A; color: #E0E0E0; font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo", sans-serif; }
+    .card { background-color: #222222; border-color: #333333; }
+    .num { font-variant-numeric: tabular-nums; }
+    .up { color: #D24F45; }
+    .down { color: #1261C4; }
+    .muted { color: #888888; }
+    .accent { color: #F2A900; }
+    .doc { white-space: pre-wrap; line-height: 1.6; font-size: 0.875rem; color: #C0C0C0; }
+
+    /* 초심자 설명 (마크다운 렌더) */
+    .prose-beginner { font-size: 0.95rem; line-height: 1.65; color: #D8D8D8; }
+    .prose-beginner h3 { font-size: 0.95rem; font-weight: 600; color: #F2A900; margin-top: 1.1em; margin-bottom: 0.4em; }
+    .prose-beginner h3:first-child { margin-top: 0; }
+    .prose-beginner p { margin-bottom: 0.6em; }
+    .prose-beginner strong { color: #FFFFFF; font-weight: 600; }
+    .prose-beginner ul { margin-left: 1.1em; margin-bottom: 0.6em; }
+    .prose-beginner li { margin-bottom: 0.3em; list-style: disc; }
+    .prose-beginner code { background: #2a2a2a; padding: 1px 5px; border-radius: 3px; font-size: 0.85em; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-2xl mx-auto p-4 pb-20">
+
+    <!-- 헤더 (← 뒤로) -->
+    <header class="flex items-center gap-3 mb-4">
+      <a href="/" class="text-xl">←</a>
+      <div class="flex-1 min-w-0">
+        <h1 class="text-xl font-semibold truncate">{{ strategy_name }}</h1>
+        <div class="muted text-xs">
+          {% if meta.category %}{{ meta.category }}{% endif %}
+          {% if meta.version %} · v{{ meta.version }}{% endif %}
+          · {{ strategy_started.strftime("%Y-%m-%d") }} 시작
+        </div>
+      </div>
+    </header>
+
+    <!-- 손익 요약 -->
+    <section class="card border rounded-lg p-4 mb-3">
+      <div class="flex items-center gap-2 mb-2">
+        {% if s.holding %}
+          <span class="text-xs px-2 py-0.5 rounded-full" style="background:#3a1f1d;color:#D24F45;">🟢 보유중</span>
+        {% else %}
+          <span class="text-xs px-2 py-0.5 rounded-full" style="background:#2a2a2a;color:#888888;">⚪ 대기중</span>
+        {% endif %}
+        {% if current_price %}
+        <span class="ml-auto muted text-xs num">현재가 ₩{{ "{:,.0f}".format(current_price) }}</span>
+        {% endif %}
+      </div>
+      <div class="muted text-sm">평가손익</div>
+      <div class="num text-2xl font-bold mt-1 {% if s.pnl >= 0 %}up{% else %}down{% endif %}">
+        {{ "{:+,.0f}".format(s.pnl) }}
+      </div>
+      <div class="num text-sm {% if s.pnl >= 0 %}up{% else %}down{% endif %}">
+        {{ "{:+.2f}".format(s.pnl_pct) }}%
+      </div>
+    </section>
+
+    <!-- 포지션 -->
+    <section class="card border rounded-lg p-4 mb-3">
+      <div class="muted text-sm mb-2">포지션</div>
+      <div class="grid grid-cols-2 gap-2 text-sm">
+        <div>
+          <div class="muted text-xs">초기자본</div>
+          <div class="num">₩{{ "{:,.0f}".format(s.initial_krw) }}</div>
+        </div>
+        <div>
+          <div class="muted text-xs">평가액</div>
+          <div class="num">₩{{ "{:,.0f}".format(s.equity) }}</div>
+        </div>
+        <div>
+          <div class="muted text-xs">현금</div>
+          <div class="num">₩{{ "{:,.0f}".format(s.cash_krw) }}</div>
+        </div>
+        <div>
+          <div class="muted text-xs">보유 BTC</div>
+          <div class="num">{{ "{:.8f}".format(s.btc) }}</div>
+        </div>
+        {% if s.holding %}
+        <div class="col-span-2">
+          <div class="muted text-xs">매수가</div>
+          <div class="num">₩{{ "{:,.0f}".format(s.avg_entry_price) }}</div>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <!-- 전략 설명 (초심자용 우선) -->
+    {% if beginner_html or meta.docstring %}
+    <section class="card border rounded-lg p-4 mb-3">
+      <div class="flex items-center gap-2 mb-3">
+        <div class="muted text-sm">전략 설명</div>
+        {% if meta.tags %}
+        <div class="ml-auto flex gap-1 flex-wrap">
+          {% for t in meta.tags %}
+          <span class="text-xs px-1.5 py-0.5 rounded muted" style="background:#2a2a2a;">{{ t }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% if meta.buy_threshold is not none and meta.sell_threshold is not none %}
+      <div class="text-xs muted mb-3">
+        <span class="up">BUY ≥ {{ meta.buy_threshold }}점</span> ·
+        <span class="down">SELL ≤ {{ meta.sell_threshold }}점</span>
+      </div>
+      {% endif %}
+
+      {% if beginner_html %}
+        <div class="prose-beginner">
+          {{ beginner_html }}
+        </div>
+        {% if meta.docstring %}
+        <details class="mt-4 pt-3" style="border-top: 1px solid #333333;">
+          <summary class="muted text-xs cursor-pointer select-none">전문가용 원본 설명 보기 ▾</summary>
+          <div class="doc mt-3">{{ meta.docstring }}</div>
+        </details>
+        {% endif %}
+      {% else %}
+        <div class="doc">{{ meta.docstring }}</div>
+        <div class="muted text-xs mt-3 pt-3" style="border-top: 1px solid #333333;">
+          초심자용 설명 미생성 — 터미널에서 <code>python3 -m paper.explanations generate {{ s.id }}</code>
+        </div>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <!-- 최근 시그널 -->
+    {% if signals %}
+    <section class="card border rounded-lg p-4 mb-3">
+      <div class="muted text-sm mb-3">최근 시그널 ({{ signals|length }}건)</div>
+      <div class="space-y-1.5 text-sm">
+        {% for sig in signals %}
+        <div class="flex justify-between items-center border-t pt-1.5 first:border-0 first:pt-0" style="border-color: #333333;">
+          <div class="flex items-center gap-2">
+            {% if sig.signal == 'BUY' %}
+              <span class="up font-medium">BUY</span>
+            {% elif sig.signal == 'SELL' %}
+              <span class="down font-medium">SELL</span>
+            {% elif sig.signal == 'ERROR' %}
+              <span class="font-medium" style="color:#F2A900;">ERROR</span>
+            {% else %}
+              <span class="muted">{{ sig.signal }}</span>
+            {% endif %}
+            {% if sig.score is not none %}
+            <span class="muted text-xs num">({{ "{:+d}".format(sig.score) }})</span>
+            {% endif %}
+          </div>
+          <div class="muted text-xs num">{{ sig.time.strftime("%m/%d %H:%M") }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <!-- 거래 내역 -->
+    {% if trades %}
+    <section class="card border rounded-lg p-4 mb-3">
+      <div class="muted text-sm mb-3">거래 내역 ({{ trades|length }}건)</div>
+      <div class="space-y-2">
+        {% for t in trades %}
+        <div class="border-t pt-2 first:border-0 first:pt-0" style="border-color: #333333;">
+          <div class="flex justify-between text-sm">
+            <span class="{% if t.side == 'buy' %}up{% else %}down{% endif %} font-medium">
+              {{ '매수' if t.side == 'buy' else '매도' }}
+            </span>
+            <span class="muted text-xs num">{{ t.time.strftime("%m/%d %H:%M") }}</span>
+          </div>
+          <div class="text-xs muted mt-0.5 num">
+            {{ "{:.8f}".format(t.btc) }} BTC @ ₩{{ "{:,.0f}".format(t.price) }}
+            · 수수료 ₩{{ "{:,.0f}".format(t.fee) }}
+          </div>
+          {% if t.realized_pnl is not none %}
+          <div class="text-xs mt-0.5 num {% if t.realized_pnl >= 0 %}up{% else %}down{% endif %}">
+            실현 PnL {{ "{:+,.0f}".format(t.realized_pnl) }}
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% else %}
+    <section class="card border rounded-lg p-4 text-center muted text-sm mb-3">
+      아직 거래 없음 — 시그널이 BUY/SELL 임계값을 넘기 전까지 대기
+    </section>
+    {% endif %}
+
+    <!-- 메타 -->
+    <footer class="muted text-xs mt-4 text-center">
+      {{ meta.registry_key }} · {{ meta.class_name }}
+    </footer>
+  </div>
+</body>
+</html>
