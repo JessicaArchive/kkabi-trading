@@ -10,13 +10,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import markdown as md_lib
 from flask import Flask, jsonify, render_template, send_from_directory
 from markupsafe import Markup
 from sqlalchemy import desc
+
+KST = timezone(timedelta(hours=9))
 
 from exchange.client import ExchangeClient
 from paper.engine import PaperEngine
@@ -121,7 +123,7 @@ def index():
         active_count=len(summaries),
         holding_count=holding_count,
         waiting_count=waiting_count,
-        now=datetime.now(),
+        now=datetime.now(KST),
     )
 
 
@@ -146,6 +148,20 @@ def _get_strategy_metadata(source: str) -> dict:
         "sell_threshold": getattr(cls, "SELL_THRESHOLD", None),
         "docstring": (cls.__doc__ or "").strip(),
     }
+
+
+@app.template_filter("kst")
+def kst_filter(dt: datetime | None) -> datetime | None:
+    """UTC(naive 또는 aware) → KST(aware) 변환.
+
+    DB의 datetime은 datetime.utcnow()로 저장된 naive UTC.
+    표시 시점에 KST로 변환해야 사용자가 "지금 시각"으로 인지.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(KST)
 
 
 def _render_markdown(text: str | None) -> Markup | None:
@@ -194,7 +210,7 @@ def strategy_detail(strategy_id: int):
         current_price=current_price,
         strategy_name=strategy.name,
         strategy_started=strategy.started_at,
-        now=datetime.now(),
+        now=datetime.now(KST),
     )
 
 

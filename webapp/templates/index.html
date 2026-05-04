@@ -29,7 +29,7 @@
     <header class="flex items-center justify-between mb-4">
       <div>
         <h1 class="text-xl font-semibold">Kkabi 페이퍼</h1>
-        <div class="text-xs muted">{{ now.strftime("%Y-%m-%d %H:%M") }} · BTC/KRW</div>
+        <div class="text-xs muted">{{ now.strftime("%Y-%m-%d %H:%M") }} KST · BTC/KRW</div>
       </div>
       <div class="text-right">
         {% if current_price %}
@@ -67,7 +67,7 @@
           {% else %}
             <span class="text-xs px-2 py-0.5 rounded-full" style="background:#2a2a2a;color:#888888;">⚪ 대기중</span>
           {% endif %}
-          <span class="muted text-xs">{{ s.started_at.strftime("%m/%d") }} 시작</span>
+          <span class="muted text-xs">{{ (s.started_at|kst).strftime("%m/%d") }} 시작</span>
           <span class="ml-auto muted text-xs">›</span>
         </div>
         <!-- 이름 + 손익 -->
@@ -117,7 +117,7 @@
             <span class="{% if t.side == 'buy' %}up{% else %}down{% endif %} font-medium">
               {{ '매수' if t.side == 'buy' else '매도' }}
             </span>
-            <span class="muted text-xs ml-1">{{ t.time.strftime("%m/%d %H:%M") }}</span>
+            <span class="muted text-xs ml-1">{{ (t.time|kst).strftime("%m/%d %H:%M") }}</span>
             <div class="muted text-xs">{{ t.strategy }}</div>
           </div>
           <div class="text-right num">
