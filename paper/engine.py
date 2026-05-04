@@ -16,6 +16,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+import requests
+
 from config import Config
 from exchange.client import ExchangeClient
 from paper.models import (
@@ -30,6 +32,30 @@ from utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 UPBIT_KRW_FEE_RATE = 0.0005  # 0.05%
+
+
+def telegram_notify(message: str) -> None:
+    """페이퍼 매수/매도 시 텔레그램 알림 (동기, requests 직접 호출).
+
+    auto_trader.py와 달리 cron-driven 동기 컨텍스트라 python-telegram-bot 비동기
+    클라이언트 대신 Bot API에 HTTPS POST 직접 호출.
+    """
+    token = Config.TELEGRAM_BOT_TOKEN
+    chat_id = Config.TELEGRAM_CHAT_ID
+    if not token or not chat_id:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": int(chat_id),
+                "text": message,
+                "parse_mode": "Markdown",
+            },
+            timeout=10,
+        )
+    except Exception as e:
+        logger.error(f"텔레그램 알림 실패: {e}")
 
 
 class PaperEngine:
@@ -126,6 +152,14 @@ class PaperEngine:
             f"[{strategy.name}] 매수 {btc_amount:.8f} BTC @ ₩{price:,.0f} "
             f"(수수료 ₩{fee:,.0f}, 잔액 ₩{strategy.cash_krw:,.0f})"
         )
+        telegram_notify(
+            f"🟢 *페이퍼 매수* (`{strategy.name}`)\n\n"
+            f"📦 수량: `{btc_amount:.8f} BTC`\n"
+            f"💰 매수가: `₩{price:,.0f}`\n"
+            f"💵 투입: `₩{(gross_krw + fee):,.0f}` (수수료 ₩{fee:,.0f})\n"
+            f"📊 점수: `{score:+d}`\n"
+            f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        )
         return trade
 
     # ── 시뮬레이션: 매도 ──────────────────────────────
@@ -175,6 +209,17 @@ class PaperEngine:
         logger.info(
             f"[{strategy.name}] 매도 {btc_amount:.8f} BTC @ ₩{price:,.0f} "
             f"(PnL ₩{realized_pnl:+,.0f} / {pnl_pct:+.2f}%)"
+        )
+        emoji = "📈" if realized_pnl >= 0 else "📉"
+        telegram_notify(
+            f"🔴 *페이퍼 매도* (`{strategy.name}`)\n\n"
+            f"📦 수량: `{btc_amount:.8f} BTC`\n"
+            f"💰 매도가: `₩{price:,.0f}`\n"
+            f"💵 매수가: `₩{entry_price:,.0f}`\n"
+            f"💸 수수료: `₩{fee:,.0f}` (편도)\n"
+            f"{emoji} 실현 PnL: `₩{realized_pnl:+,.0f}` (`{pnl_pct:+.2f}%`)\n"
+            f"📊 점수: `{score:+d}`\n"
+            f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         )
         return trade
 
