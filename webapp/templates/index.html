@@ -29,7 +29,7 @@
     <header class="flex items-center justify-between mb-4">
       <div>
         <h1 class="text-xl font-semibold">Kkabi 페이퍼</h1>
-        <div class="text-xs muted">{{ now.strftime("%Y-%m-%d %H:%M") }} · BTC/KRW</div>
+        <div class="text-xs muted">{{ now.strftime("%Y-%m-%d %H:%M") }} KST · BTC/KRW</div>
       </div>
       <div class="text-right">
         {% if current_price %}
@@ -48,21 +48,41 @@
       <div class="num text-sm mt-1 {% if total_pnl >= 0 %}up{% else %}down{% endif %}">
         {{ "{:+,.0f}".format(total_pnl) }} ({{ "{:+.2f}".format(total_pnl_pct) }}%)
       </div>
-      <div class="muted text-xs mt-2">활성 전략 {{ active_count }}개 · 정렬: 수익률 ↓</div>
+      <div class="muted text-xs mt-2">
+        활성 {{ active_count }}개
+        · <span class="up">보유 {{ holding_count }}</span>
+        · 대기 {{ waiting_count }}
+        · 정렬: 수익률 ↓
+      </div>
     </section>
 
     <!-- 전략 목록 -->
     <section class="space-y-2 mb-6">
       {% for s in strategies %}
-      <div class="card border rounded-lg p-4">
+      <a href="/strategy/{{ s.id }}" class="block card border rounded-lg p-4 active:opacity-70 transition-opacity">
+        <!-- 상태 뱃지 -->
+        <div class="flex items-center gap-2 mb-2">
+          {% if s.holding %}
+            <span class="text-xs px-2 py-0.5 rounded-full" style="background:#3a1f1d;color:#D24F45;">🟢 보유중</span>
+          {% else %}
+            <span class="text-xs px-2 py-0.5 rounded-full" style="background:#2a2a2a;color:#888888;">⚪ 대기중</span>
+          {% endif %}
+          <span class="muted text-xs">{{ (s.started_at|kst).strftime("%m/%d") }} 시작</span>
+          <span class="ml-auto muted text-xs">›</span>
+        </div>
+        <!-- 이름 + 손익 -->
         <div class="flex items-start justify-between">
           <div class="flex-1 min-w-0">
             <div class="font-semibold truncate">{{ s.name }}</div>
-            <div class="muted text-xs mt-1">
+            <div class="text-xs mt-1.5">
               {% if s.holding %}
-                보유 {{ "{:.8f}".format(s.btc) }} BTC @ ₩{{ "{:,.0f}".format(s.avg_entry_price) }}
+                <span class="muted">매수가</span>
+                <span class="num">₩{{ "{:,.0f}".format(s.avg_entry_price) }}</span>
+                <span class="muted">·</span>
+                <span class="num">{{ "{:.8f}".format(s.btc) }} BTC</span>
               {% else %}
-                현금만 ₩{{ "{:,.0f}".format(s.cash_krw) }}
+                <span class="muted">포지션 없음 · 현금</span>
+                <span class="num">₩{{ "{:,.0f}".format(s.cash_krw) }}</span>
               {% endif %}
             </div>
           </div>
@@ -75,11 +95,10 @@
             </div>
           </div>
         </div>
-        <div class="muted text-xs mt-2 flex justify-between">
-          <span>평가액 ₩{{ "{:,.0f}".format(s.equity) }}</span>
-          <span>{{ s.started_at.strftime("%m/%d") }} 시작</span>
+        <div class="muted text-xs mt-2">
+          평가액 ₩{{ "{:,.0f}".format(s.equity) }}
         </div>
-      </div>
+      </a>
       {% else %}
       <div class="card border rounded-lg p-6 text-center muted">
         활성 전략 없음. <code>python3 -m paper.manage register &lt;key&gt;</code>로 추가하세요.
@@ -98,7 +117,7 @@
             <span class="{% if t.side == 'buy' %}up{% else %}down{% endif %} font-medium">
               {{ '매수' if t.side == 'buy' else '매도' }}
             </span>
-            <span class="muted text-xs ml-1">{{ t.time.strftime("%m/%d %H:%M") }}</span>
+            <span class="muted text-xs ml-1">{{ (t.time|kst).strftime("%m/%d %H:%M") }}</span>
             <div class="muted text-xs">{{ t.strategy }}</div>
           </div>
           <div class="text-right num">

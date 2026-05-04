@@ -57,6 +57,7 @@ class PaperStrategy(Base):
     avg_entry_price = Column(Float, nullable=False, default=0.0)
     status = Column(String, nullable=False, default="active")  # active|paused|stopped
     note = Column(String)                              # 사람이 본인 메모 (선택)
+    beginner_explanation = Column(String)              # AI가 생성한 초심자용 한국어 설명 (Markdown)
 
     trades = relationship("PaperTrade", back_populates="strategy", cascade="all, delete-orphan")
     signals = relationship("PaperSignal", back_populates="strategy", cascade="all, delete-orphan")
